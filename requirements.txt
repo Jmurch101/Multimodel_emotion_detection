@@ -1,0 +1,11 @@
+streamlit==1.39.0
+ultralytics==8.2.103
+# Use a compatible torch/torchvision for your platform; these are broad pins
+torch>=2.2.0
+torchvision>=0.17.0
+opencv-python>=4.9.0.80
+numpy>=1.24.0
+mtcnn==0.1.1
+deepface==0.0.93
+pillow>=10.0.0
+pandas>=2.0.0

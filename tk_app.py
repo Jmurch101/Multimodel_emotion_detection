@@ -18,9 +18,7 @@ from typing import List, Dict, Optional
 from PIL import Image, ImageTk
 import threading
 
-from detectors import PersonDetector
-from detectors.face_analyzer import FaceAnalyzer
-from utils import draw_annotations
+# Lazy imports for ML libraries to avoid macOS mutex issues
 
 
 def _ensure_cv2():
@@ -60,9 +58,12 @@ class InferenceEngine:
 		self._is_loading = True
 		self._load_error = None
 		try:
+			# Lazy import ML modules only when needed
 			if self.person_detector is None:
+				from detectors import PersonDetector
 				self.person_detector = PersonDetector()
 			if self.face_analyzer is None:
+				from detectors.face_analyzer import FaceAnalyzer
 				self.face_analyzer = FaceAnalyzer()
 		except Exception as e:
 			self._load_error = str(e)
@@ -84,6 +85,11 @@ class InferenceEngine:
 			return persons_with_faces
 		except Exception:
 			return None
+
+	def draw_annotations(self, image_bgr, persons_with_faces):
+		# Lazy import draw_annotations function
+		from utils import draw_annotations
+		return draw_annotations(image_bgr, persons_with_faces)
 
 
 class MainApp:
@@ -229,7 +235,7 @@ class MainApp:
 		if (self.frame_count % self.infer_every_n == 0) and (self.infer_thread is None or not self.infer_thread.is_alive()):
 			self._process_and_display(frame)
 		else:
-			to_show = frame if not self.last_persons_with_faces else draw_annotations(frame, self.last_persons_with_faces)
+			to_show = frame if not self.last_persons_with_faces else self.infer.draw_annotations(frame, self.last_persons_with_faces)
 			self._display_only(to_show)
 		self.timer_id = self.root.after(33, self._on_timer)
 
@@ -242,7 +248,7 @@ class MainApp:
 
 		self.last_persons_with_faces = result
 		if self._pending_image is not None:
-			annotated = draw_annotations(self._pending_image, result)
+			annotated = self.infer.draw_annotations(self._pending_image, result)
 			self._display_only(annotated)
 			self._pending_image = None
 		self._update_table(result)

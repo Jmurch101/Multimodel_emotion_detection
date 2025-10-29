@@ -2,30 +2,36 @@ from typing import List, Dict, Any
 
 import numpy as np
 
-try:
-	from mtcnn import MTCNN
-except Exception:  # pragma: no cover
-	MTCNN = None  # type: ignore
-
-try:
-	from deepface import DeepFace
-except Exception:  # pragma: no cover
-	DeepFace = None  # type: ignore
-
 
 class FaceAnalyzer:
-	"""Detect faces and analyze age and emotion within person regions."""
+	"""Detect faces and analyze age and emotion within person regions.
+
+	Lazily loads MTCNN and DeepFace to avoid heavy imports during GUI startup.
+	"""
 
 	def __init__(self) -> None:
-		if MTCNN is None:
-			raise RuntimeError("MTCNN is not available. Please ensure 'mtcnn' is installed.")
-		if DeepFace is None:
-			raise RuntimeError("DeepFace is not available. Please ensure 'deepface' is installed.")
-		self.face_detector = MTCNN()
+		self._mtcnn = None
+		self._deepface = None
+
+	def _ensure_mtcnn(self):
+		if self._mtcnn is None:
+			try:
+				from mtcnn import MTCNN  # local import to delay TensorFlow init
+			except Exception as exc:
+				raise RuntimeError("MTCNN is not available. Please ensure 'mtcnn' is installed.") from exc
+			self._mtcnn = MTCNN()
+
+	def _ensure_deepface(self):
+		if self._deepface is None:
+			try:
+				from deepface import DeepFace  # local import to delay TensorFlow init
+			except Exception as exc:
+				raise RuntimeError("DeepFace is not available. Please ensure 'deepface' is installed.") from exc
+			self._deepface = DeepFace
 
 	def _analyze_face_age_emotion(self, face_bgr: np.ndarray) -> Dict[str, Any]:
-		# Use DeepFace without re-detecting: detector_backend='skip'
-		analysis = DeepFace.analyze(
+		self._ensure_deepface()
+		analysis = self._deepface.analyze(
 			img_path=face_bgr,
 			actions=["age", "emotion"],
 			enforce_detection=False,
@@ -49,6 +55,7 @@ class FaceAnalyzer:
 		- person_score: float
 		- faces: List[{ face_bbox, face_score, age, dominant_emotion, emotion_scores }]
 		"""
+		self._ensure_mtcnn()
 		results: List[Dict] = []
 		image_h, image_w = image_bgr.shape[:2]
 		for det in person_detections:
@@ -56,7 +63,7 @@ class FaceAnalyzer:
 			x1, y1 = max(0, x1), max(0, y1)
 			x2, y2 = min(image_w - 1, x2), min(image_h - 1, y2)
 			person_roi = image_bgr[y1:y2, x1:x2]
-			faces_raw = self.face_detector.detect_faces(person_roi)
+			faces_raw = self._mtcnn.detect_faces(person_roi)
 
 			faces_info = []
 			for f in faces_raw:

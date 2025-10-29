@@ -1,10 +1,15 @@
 from typing import List, Dict
 
-import cv2
 import numpy as np
 
 
+def _cv2():
+	import cv2 as _cv
+	return _cv
+
+
 def _draw_label(image: np.ndarray, text: str, x: int, y: int, color=(0, 0, 0), bg=(255, 255, 255)) -> None:
+	cv2 = _cv2()
 	font = cv2.FONT_HERSHEY_SIMPLEX
 	scale = 0.5
 	thickness = 1
@@ -18,6 +23,7 @@ def _draw_label(image: np.ndarray, text: str, x: int, y: int, color=(0, 0, 0), b
 
 def draw_annotations(image_bgr: np.ndarray, persons_with_faces: List[Dict]) -> np.ndarray:
 	"""Draw person and face boxes with labels on a copy of the image and return it."""
+	cv2 = _cv2()
 	annotated = image_bgr.copy()
 	person_color = (255, 128, 0)  # Blue-ish
 	face_color = (0, 200, 0)      # Green

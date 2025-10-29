@@ -1,7 +1,4 @@
-# Minimal deps for desktop GUI (PyQt6 or PySide6)
-# Choose ONE of the GUI bindings below:
-PyQt6>=6.6.0
-# PySide6>=6.6.0
+# Desktop GUI: Tkinter (built-in to Python)
 
 ultralytics==8.2.103
 # Use a compatible torch/torchvision for your platform; these are broad pins

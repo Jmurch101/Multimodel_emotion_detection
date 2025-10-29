@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 import sys
 from typing import List, Dict, Optional
 from PIL import Image, ImageTk
-import multiprocessing as mp
+import threading
 
 from detectors import PersonDetector
 from detectors.face_analyzer import FaceAnalyzer
@@ -44,58 +44,46 @@ def bgr_to_pil(image_bgr):
 	return Image.fromarray(image_rgb)
 
 
-class InferenceProcess:
+class InferenceEngine:
 	def __init__(self) -> None:
-		self._proc: Optional[mp.Process] = None
-		self._parent_conn = None
-		self._ctx = mp.get_context("spawn")
-		self._pending = False
+		self.person_detector = None
+		self.face_analyzer = None
+		self._is_loading = False
+		self._load_error = None
 
-	def start(self) -> None:
-		if self._proc is not None:
+	def load_models(self) -> None:
+		if self.person_detector is not None and self.face_analyzer is not None:
 			return
-		parent_conn, child_conn = self._ctx.Pipe()
-		from inference_worker import run_worker
-		self._proc = self._ctx.Process(target=run_worker, args=(child_conn,), daemon=True)
-		self._proc.start()
-		self._parent_conn = parent_conn
-		self._parent_conn.send({"cmd": "ping"})
-		self._parent_conn.recv()
+		if self._is_loading:
+			return
 
-	def is_busy(self) -> bool:
-		return bool(self._pending)
-
-	def request_analyze(self, image_bgr) -> bool:
-		if self._proc is None or self._parent_conn is None:
-			self.start()
-		if self._pending:
-			return False
-		self._parent_conn.send({"cmd": "analyze", "image": image_bgr})
-		self._pending = True
-		return True
-
-	def poll_result(self) -> Optional[Dict]:
-		if self._proc is None or self._parent_conn is None:
-			return None
-		if self._parent_conn.poll():
-			resp = self._parent_conn.recv()
-			self._pending = False
-			return resp
-		return None
-
-	def stop(self) -> None:
+		self._is_loading = True
+		self._load_error = None
 		try:
-			if self._parent_conn is not None:
-				self._parent_conn.send({"cmd": "shutdown"})
-				self._parent_conn.recv()
-			if self._proc is not None and self._proc.is_alive():
-				self._proc.join(timeout=1)
-		except Exception:
-			pass
+			if self.person_detector is None:
+				self.person_detector = PersonDetector()
+			if self.face_analyzer is None:
+				self.face_analyzer = FaceAnalyzer()
+		except Exception as e:
+			self._load_error = str(e)
 		finally:
-			self._proc = None
-			self._parent_conn = None
-			self._pending = False
+			self._is_loading = False
+
+	def is_loading(self) -> bool:
+		return self._is_loading
+
+	def get_load_error(self) -> Optional[str]:
+		return self._load_error
+
+	def analyze(self, image_bgr) -> Optional[List[Dict]]:
+		if self.person_detector is None or self.face_analyzer is None:
+			return None
+		try:
+			persons = self.person_detector.detect(image_bgr)
+			persons_with_faces = self.face_analyzer.analyze(image_bgr, persons)
+			return persons_with_faces
+		except Exception:
+			return None
 
 
 class MainApp:
@@ -103,10 +91,10 @@ class MainApp:
 		self.root = root
 		self.root.title("Multimodal Emotion & Age Analyzer (Tkinter)")
 
-		self.infer = InferenceProcess()
+		self.infer = InferenceEngine()
 		self.video_cap = None
 		self.timer_id = None
-		self.infer_timer_id = None
+		self.infer_thread = None
 		self.frame_count = 0
 		self.infer_every_n = 5
 		self.last_persons_with_faces: List[Dict] = []
@@ -144,7 +132,34 @@ class MainApp:
 
 		self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+		# Load models in background
+		self.status_label.config(text="Loading models...")
+		self.root.after(100, self._load_models_async)
+
+	def _load_models_async(self) -> None:
+		if self.infer.is_loading():
+			self.root.after(500, self._load_models_async)
+			return
+
+		if self.infer.person_detector is None or self.infer.face_analyzer is None:
+			# Start loading in background thread
+			load_thread = threading.Thread(target=self.infer.load_models, daemon=True)
+			load_thread.start()
+			self.root.after(500, self._load_models_async)
+		else:
+			# Check for load error
+			error = self.infer.get_load_error()
+			if error:
+				self.status_label.config(text=f"Model load failed: {error}")
+				messagebox.showerror("Model Load Error", f"Failed to load models: {error}")
+			else:
+				self.status_label.config(text="Ready")
+
 	def open_image(self) -> None:
+		if self.infer.person_detector is None or self.infer.face_analyzer is None:
+			messagebox.showerror("Error", "Models are still loading. Please wait.")
+			return
+
 		cv2 = _ensure_cv2()
 		path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg")])
 		if not path:
@@ -156,6 +171,10 @@ class MainApp:
 		self._process_and_display(image_bgr)
 
 	def open_video(self) -> None:
+		if self.infer.person_detector is None or self.infer.face_analyzer is None:
+			messagebox.showerror("Error", "Models are still loading. Please wait.")
+			return
+
 		cv2 = _ensure_cv2()
 		path = filedialog.askopenfilename(filetypes=[("Videos", "*.mp4 *.mov *.avi *.mkv")])
 		if not path:
@@ -163,6 +182,10 @@ class MainApp:
 		self._start_capture(cv2.VideoCapture(path))
 
 	def open_camera(self) -> None:
+		if self.infer.person_detector is None or self.infer.face_analyzer is None:
+			messagebox.showerror("Error", "Models are still loading. Please wait.")
+			return
+
 		cv2 = _ensure_cv2()
 		self._start_capture(cv2.VideoCapture(0))
 
@@ -170,16 +193,18 @@ class MainApp:
 		if self.timer_id:
 			self.root.after_cancel(self.timer_id)
 			self.timer_id = None
-		if self.infer_timer_id:
-			self.root.after_cancel(self.infer_timer_id)
-			self.infer_timer_id = None
+		if self.infer_thread and self.infer_thread.is_alive():
+			# Wait for inference to finish
+			self.infer_thread.join(timeout=1)
+		self.infer_thread = None
 		if self.video_cap is not None:
 			self.video_cap.release()
 			self.video_cap = None
 		self.status_label.config(text="")
 
 	def on_close(self) -> None:
-		self.infer.stop()
+		if self.infer_thread and self.infer_thread.is_alive():
+			self.infer_thread.join(timeout=1)
 		self.root.destroy()
 
 	def _start_capture(self, cap) -> None:
@@ -201,42 +226,42 @@ class MainApp:
 			self.stop_stream()
 			return
 		self.frame_count += 1
-		if (self.frame_count % self.infer_every_n == 0) and (not self.infer.is_busy()):
+		if (self.frame_count % self.infer_every_n == 0) and (self.infer_thread is None or not self.infer_thread.is_alive()):
 			self._process_and_display(frame)
 		else:
 			to_show = frame if not self.last_persons_with_faces else draw_annotations(frame, self.last_persons_with_faces)
 			self._display_only(to_show)
 		self.timer_id = self.root.after(33, self._on_timer)
 
-	def _on_infer_timer(self) -> None:
-		resp = self.infer.poll_result()
-		if resp is None:
-			self.infer_timer_id = self.root.after(50, self._on_infer_timer)
-			return
-		self.infer_timer_id = None
-		if not resp.get("ok"):
+	def _inference_done(self, result: Optional[List[Dict]]) -> None:
+		self.infer_thread = None
+		if result is None:
 			self.status_label.config(text="Inference failed")
-			messagebox.showerror("Error", f"Inference failed: {resp.get('error')}")
+			messagebox.showerror("Error", "Inference failed")
 			return
-		persons_with_faces = resp.get("persons_with_faces", [])
-		self.last_persons_with_faces = persons_with_faces
+
+		self.last_persons_with_faces = result
 		if self._pending_image is not None:
-			annotated = draw_annotations(self._pending_image, persons_with_faces)
+			annotated = draw_annotations(self._pending_image, result)
 			self._display_only(annotated)
 			self._pending_image = None
-		self._update_table(persons_with_faces)
-		self.status_label.config(text="")
+		self._update_table(result)
+		self.status_label.config(text="Ready")
 
 	def _process_and_display(self, image_bgr) -> None:
 		self._display_only(image_bgr)
 		self._pending_image = image_bgr
 		self.status_label.config(text="Analyzing...")
-		if self.infer.request_analyze(image_bgr):
-			if self.infer_timer_id is None:
-				self._on_infer_timer()
-		else:
-			# Already busy
-			pass
+
+		if self.infer_thread and self.infer_thread.is_alive():
+			return  # Already processing
+
+		def inference_task():
+			result = self.infer.analyze(image_bgr)
+			self.root.after(0, lambda: self._inference_done(result))
+
+		self.infer_thread = threading.Thread(target=inference_task, daemon=True)
+		self.infer_thread.start()
 
 	def _display_only(self, image_bgr) -> None:
 		pil_img = bgr_to_pil(image_bgr)
@@ -264,11 +289,6 @@ class MainApp:
 
 
 if __name__ == "__main__":
-	# Ensure spawn context for macOS
-	try:
-		mp.set_start_method("spawn", force=True)
-	except Exception:
-		pass
 	root = tk.Tk()
 	app = MainApp(root)
 	root.mainloop()

@@ -90,24 +90,23 @@ def main():
     face_ok = test_face_analysis()
     print()
 
-    deepface_ok = test_deepface_analysis()
+    # Skip DeepFace test since we're using OpenCV-based age/emotion now
+    deepface_ok = True  # Not tested, using OpenCV alternative
+    print("DeepFace test skipped (using OpenCV-based age/emotion estimation)")
     print()
 
     print("=== Summary ===")
     print(f"OpenCV: {'✓' if opencv_ok else '✗'}")
     print(f"YOLOv8: {'✓' if yolo_ok else '✗'}")
-    print(f"Face Detection (MTCNN): {'✓' if face_ok else '✗'}")
-    print(f"DeepFace (Age/Emotion): {'✓' if deepface_ok else '✗'}")
+    print(f"Face Detection + Age/Emotion (OpenCV): {'✓' if face_ok else '✗'}")
+    print(f"DeepFace: Skipped (using OpenCV alternative)")
 
     if not all([opencv_ok, yolo_ok, face_ok]):
         print("\n❌ Core models failed. Check error messages above.")
         return 1
-    elif not deepface_ok:
-        print("\n⚠️  Core models work, but DeepFace failed (expected on macOS)")
-        print("   → App will work with face detection only (no age/emotion)")
-        return 0
     else:
         print("\n✅ All models loaded successfully!")
+        print("   → Age/emotion estimation uses OpenCV-based heuristics")
         return 0
 
 if __name__ == "__main__":

@@ -273,24 +273,24 @@ class MainApp:
 			self.status_label.config(text="NO PERSONS DETECTED", fg="orange")
 			self.progress_label.config(text="No people found in the image. Try a different image with visible people.")
 		else:
-		self.status_label.config(text="ANALYSIS COMPLETE", fg="green")
-		if total_faces > 0:
-			# Show age/emotion summary
-			ages = []
-			emotions = []
-			for entry in result:
-				for face in entry.get("faces", []):
-					if face.get("age"):
-						ages.append(face["age"])
-					if face.get("dominant_emotion"):
-						emotions.append(face["dominant_emotion"])
+			self.status_label.config(text="ANALYSIS COMPLETE", fg="green")
+			if total_faces > 0:
+				# Show age/emotion summary
+				ages = []
+				emotions = []
+				for entry in result:
+					for face in entry.get("faces", []):
+						if face.get("age"):
+							ages.append(face["age"])
+						if face.get("dominant_emotion"):
+							emotions.append(face["dominant_emotion"])
 
-			age_summary = f"Ages: {', '.join(map(str, ages))}" if ages else "Ages: N/A"
-			emotion_summary = f"Emotions: {', '.join(emotions)}" if emotions else "Emotions: N/A"
+				age_summary = f"Ages: {', '.join(map(str, ages))}" if ages else "Ages: N/A"
+				emotion_summary = f"Emotions: {', '.join(emotions)}" if emotions else "Emotions: N/A"
 
-			self.progress_label.config(text=f"Found {total_persons} person(s) and {total_faces} face(s). {age_summary}. {emotion_summary}.")
-		else:
-			self.progress_label.config(text=f"Found {total_persons} person(s) and {total_faces} face(s). Age/emotion analysis not available.")
+				self.progress_label.config(text=f"Found {total_persons} person(s) and {total_faces} face(s). {age_summary}. {emotion_summary}.")
+			else:
+				self.progress_label.config(text=f"Found {total_persons} person(s) and {total_faces} face(s). Age/emotion analysis not available.")
 
 	def _process_and_display(self, image_bgr) -> None:
 		self._display_only(image_bgr)

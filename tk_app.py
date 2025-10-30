@@ -11,14 +11,12 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+# Minimal imports only
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import sys
 from typing import List, Dict, Optional
-from PIL import Image, ImageTk
 import threading
-
-# Lazy imports for ML libraries to avoid macOS mutex issues
 
 
 def _ensure_cv2():
@@ -37,9 +35,15 @@ def _ensure_cv2():
 
 def bgr_to_pil(image_bgr):
 	"""Convert BGR numpy array to PIL Image."""
+	from PIL import Image
 	cv2 = _ensure_cv2()
 	image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 	return Image.fromarray(image_rgb)
+
+
+def _ensure_piltk():
+	from PIL import ImageTk
+	return ImageTk
 
 
 class InferenceEngine:
@@ -63,8 +67,9 @@ class InferenceEngine:
 				from detectors import PersonDetector
 				self.person_detector = PersonDetector()
 			if self.face_analyzer is None:
-				from detectors.face_analyzer import FaceAnalyzer
-				self.face_analyzer = FaceAnalyzer()
+				# Use OpenCV face analyzer (no TensorFlow) for macOS compatibility
+				from detectors.face_analyzer_opencv import OpenCVFaceAnalyzer
+				self.face_analyzer = OpenCVFaceAnalyzer()
 		except Exception as e:
 			self._load_error = str(e)
 		finally:
@@ -110,8 +115,11 @@ class MainApp:
 		self.image_label = tk.Label(root)
 		self.image_label.pack(pady=10)
 
-		self.status_label = tk.Label(root, text="")
-		self.status_label.pack()
+		self.status_label = tk.Label(root, text="", font=("Arial", 12, "bold"))
+		self.status_label.pack(pady=5)
+
+		self.progress_label = tk.Label(root, text="", fg="blue")
+		self.progress_label.pack()
 
 		controls = tk.Frame(root)
 		controls.pack(pady=5)
@@ -139,7 +147,8 @@ class MainApp:
 		self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
 		# Load models in background
-		self.status_label.config(text="Loading models...")
+		self.status_label.config(text="INITIALIZING", fg="orange")
+		self.progress_label.config(text="Loading AI models (may take 30-60 seconds first time)...")
 		self.root.after(100, self._load_models_async)
 
 	def _load_models_async(self) -> None:
@@ -156,10 +165,12 @@ class MainApp:
 			# Check for load error
 			error = self.infer.get_load_error()
 			if error:
-				self.status_label.config(text=f"Model load failed: {error}")
+				self.status_label.config(text="MODEL LOAD FAILED", fg="red")
+				self.progress_label.config(text=f"Error: {error}")
 				messagebox.showerror("Model Load Error", f"Failed to load models: {error}")
 			else:
-				self.status_label.config(text="Ready")
+				self.status_label.config(text="READY", fg="green")
+				self.progress_label.config(text="Models loaded successfully. Ready to process images.")
 
 	def open_image(self) -> None:
 		if self.infer.person_detector is None or self.infer.face_analyzer is None:
@@ -206,7 +217,8 @@ class MainApp:
 		if self.video_cap is not None:
 			self.video_cap.release()
 			self.video_cap = None
-		self.status_label.config(text="")
+		self.status_label.config(text="READY", fg="green")
+		self.progress_label.config(text="Ready to process images.")
 
 	def on_close(self) -> None:
 		if self.infer_thread and self.infer_thread.is_alive():
@@ -252,12 +264,23 @@ class MainApp:
 			self._display_only(annotated)
 			self._pending_image = None
 		self._update_table(result)
-		self.status_label.config(text="Ready")
+
+		# Count detections
+		total_persons = len(result)
+		total_faces = sum(len(entry.get("faces", [])) for entry in result)
+
+		if total_persons == 0:
+			self.status_label.config(text="NO PERSONS DETECTED", fg="orange")
+			self.progress_label.config(text="No people found in the image. Try a different image with visible people.")
+		else:
+			self.status_label.config(text="PROCESSING COMPLETE", fg="green")
+			self.progress_label.config(text=f"Found {total_persons} person(s) and {total_faces} face(s). Results displayed above.")
 
 	def _process_and_display(self, image_bgr) -> None:
 		self._display_only(image_bgr)
 		self._pending_image = image_bgr
-		self.status_label.config(text="Analyzing...")
+		self.status_label.config(text="PROCESSING", fg="blue")
+		self.progress_label.config(text="Detecting people and faces...")
 
 		if self.infer_thread and self.infer_thread.is_alive():
 			return  # Already processing
@@ -274,6 +297,7 @@ class MainApp:
 		# Resize to fit label
 		label_width, label_height = 640, 360
 		pil_img.thumbnail((label_width, label_height))
+		ImageTk = _ensure_piltk()
 		tk_img = ImageTk.PhotoImage(pil_img)
 		self.image_label.config(image=tk_img)
 		self.image_label.image = tk_img  # keep reference
@@ -283,13 +307,24 @@ class MainApp:
 			self.table.delete(item)
 		for p_idx, entry in enumerate(persons_with_faces):
 			for f_idx, face in enumerate(entry.get("faces", [])):
+				age_val = face.get("age")
+				if age_val is None:
+					age_display = "N/A"
+				elif isinstance(age_val, (int, float)):
+					age_display = str(int(age_val))
+				else:
+					age_display = str(age_val)
+
+				emotion_val = face.get("dominant_emotion")
+				emotion_display = emotion_val.title() if emotion_val else "N/A"
+
 				values = (
 					str(p_idx + 1),
 					str(round(float(entry.get("person_score", 0.0)), 3)),
 					str(f_idx + 1),
 					str(round(float(face.get("face_score", 0.0)), 3)),
-					str(int(face.get("age", -1)) if isinstance(face.get("age", None), (int, float)) else face.get("age", None)),
-					str(face.get("dominant_emotion", None)),
+					age_display,
+					emotion_display,
 				)
 				self.table.insert("", tk.END, values=values)
 
